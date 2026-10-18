@@ -56,21 +56,78 @@ const defaults={
 };
 let state=loadState(), page='dashboard', editingId=null, imageData='';
 function loadState(){try{const x=JSON.parse(localStorage.getItem(STORE));return x?{...structuredClone(defaults),...x,settings:{...defaults.settings,...x.settings}}:structuredClone(defaults)}catch(e){return structuredClone(defaults)}}
-let cloudClient=null, currentUser=null, cloudSaveTimer=null, cloudSaveInFlight=Promise.resolve();
+let cloudClient=null, currentUser=null, cloudSaveTimer=null, cloudSaveInFlight=Promise.resolve(), cloudChannel=null, applyingRemoteState=false;
+const MERGED_ARRAY_KEYS=['products','templates','savedCatalogues','orders'];
+function mergeStates(base={},incoming={}){
+  const out={...structuredClone(defaults),...base,...incoming,settings:{...defaults.settings,...(base.settings||{}),...(incoming.settings||{})}};
+  for(const key of MERGED_ARRAY_KEYS){
+    const a=Array.isArray(base[key])?base[key]:[], b=Array.isArray(incoming[key])?incoming[key]:[];
+    const map=new Map();
+    // Incoming values win for the same record id; records with different IDs are preserved.
+    for(const item of a)if(item&&item.id!=null)map.set(String(item.id),item);
+    for(const item of b)if(item&&item.id!=null)map.set(String(item.id),item);
+    out[key]=[...map.values()];
+  }
+  return out;
+}
 function save(){
   try{localStorage.setItem(STORE,JSON.stringify(state))}catch(e){console.warn('Local backup could not be saved',e)}
-  if(currentUser&&cloudClient){clearTimeout(cloudSaveTimer);setCloudStatus('● Saving…');cloudSaveTimer=setTimeout(()=>{cloudSaveInFlight=cloudSaveInFlight.then(async()=>{if(!currentUser)return;const payload={owner_id:currentUser.id,state_json:state,updated_at:new Date().toISOString()};const {error}=await cloudClient.from('cloudkrafts_app_state').upsert(payload,{onConflict:'owner_id'});if(error){console.error(error);setCloudStatus('● Cloud save failed');toast('Cloud save failed: '+error.message)}else setCloudStatus('● Cloud synced')}).catch(e=>{console.error(e);setCloudStatus('● Cloud save failed')})},500)}
+  if(currentUser&&cloudClient&&!applyingRemoteState){
+    clearTimeout(cloudSaveTimer);setCloudStatus('● Syncing changes…');
+    // The database RPC merges records atomically, preventing one device's stale snapshot
+    // from replacing products added by another device.
+    const snapshot=structuredClone(state), uid=currentUser.id;
+    cloudSaveTimer=setTimeout(()=>{cloudSaveInFlight=cloudSaveInFlight.then(async()=>{
+      if(!currentUser||currentUser.id!==uid)return;
+      const {data,error}=await cloudClient.rpc('merge_cloudkrafts_app_state',{p_state:snapshot});
+      if(error){console.error(error);setCloudStatus('● Sync failed');toast('Cloud sync failed: '+error.message);return}
+      if(data&&typeof data==='object'){
+        applyingRemoteState=true;
+        state=mergeStates(state,data);
+        try{localStorage.setItem(STORE,JSON.stringify(state))}catch(e){}
+        applyingRemoteState=false;
+      }
+      setCloudStatus('● All devices synced');
+    }).catch(e=>{applyingRemoteState=false;console.error(e);setCloudStatus('● Sync failed')})},350);
+  }
+}
+function applyRemoteState(remote){
+  if(!remote||typeof remote!=='object')return;
+  applyingRemoteState=true;
+  state=mergeStates(state,remote);
+  try{localStorage.setItem(STORE,JSON.stringify(state))}catch(e){}
+  applyingRemoteState=false;
+  // Refresh the visible screen without changing the current page.
+  render();setCloudStatus('● Updated from another device');
+}
+function subscribeToCloudState(userId){
+  if(cloudChannel){cloudClient.removeChannel(cloudChannel);cloudChannel=null;}
+  cloudChannel=cloudClient.channel('cloudkrafts-state-'+userId)
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'cloudkrafts_app_state',filter:'owner_id=eq.'+userId},payload=>{
+      if(payload.new&&payload.new.state_json)applyRemoteState(payload.new.state_json);
+    })
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'cloudkrafts_app_state',filter:'owner_id=eq.'+userId},payload=>{
+      if(payload.new&&payload.new.state_json)applyRemoteState(payload.new.state_json);
+    }).subscribe(status=>{if(status==='SUBSCRIBED')setCloudStatus('● Live sync enabled')});
 }
 function setCloudStatus(t){const el=document.getElementById('cloud-status');if(el)el.textContent=t}
 function showAuthError(message){const el=document.getElementById('auth-error');el.textContent=message;el.classList.remove('hidden')}
 function setAuthMode(){document.getElementById('auth-error').classList.add('hidden')}
-async function showWorkspace(user){currentUser=user;document.getElementById('auth-root').classList.add('hidden');document.getElementById('app-shell').classList.remove('hidden');document.getElementById('signout-btn').onclick=async()=>{await cloudClient.auth.signOut()};
-  setCloudStatus('● Loading cloud…');
+async function showWorkspace(user){
+  currentUser=user;document.getElementById('auth-root').classList.add('hidden');document.getElementById('app-shell').classList.remove('hidden');
+  document.getElementById('signout-btn').onclick=async()=>{if(cloudChannel){await cloudClient.removeChannel(cloudChannel);cloudChannel=null}await cloudClient.auth.signOut()};
+  setCloudStatus('● Loading shared workspace…');
   const {data,error}=await cloudClient.from('cloudkrafts_app_state').select('state_json').eq('owner_id',user.id).maybeSingle();
   if(error){setCloudStatus('● Database setup needed');toast('Cloud database error: '+error.message);render();return}
-  if(data&&data.state_json){const x=data.state_json;state={...structuredClone(defaults),...x,settings:{...defaults.settings,...(x.settings||{})}};try{localStorage.setItem(STORE,JSON.stringify(state))}catch(e){}}
-  else {state=loadState();const {error:saveError}=await cloudClient.from('cloudkrafts_app_state').upsert({owner_id:user.id,state_json:state},{onConflict:'owner_id'});if(saveError){setCloudStatus('● Cloud save failed');toast('Could not initialize cloud data: '+saveError.message)}else setCloudStatus('● Cloud synced')}
-  render();
+  if(data&&data.state_json){state=mergeStates(defaults,data.state_json);try{localStorage.setItem(STORE,JSON.stringify(state))}catch(e){}}
+  else {
+    // On the first login only, seed cloud from this browser's local state.
+    state=loadState();
+    const {data:merged,error:saveError}=await cloudClient.rpc('merge_cloudkrafts_app_state',{p_state:state});
+    if(saveError){setCloudStatus('● Sync setup needed');toast('Could not initialize shared cloud data: '+saveError.message)}
+    else if(merged)state=mergeStates(state,merged);
+  }
+  render();subscribeToCloudState(user.id);
 }
 async function initializeCloudAuth(){
   try{cloudClient=window.supabase.createClient('https://mfuyabgvtpnqhjwxbaes.supabase.co','sb_publishable_Xa-RDs9-jd48YvggGIiNQQ_rWBoI_uH');}
