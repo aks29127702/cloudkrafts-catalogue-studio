@@ -197,69 +197,60 @@ async function exportCataloguePDF(){
     if(btn){btn.disabled=true;btn.textContent='Generating PDF…';}
     const {jsPDF}=window.jspdf;
     const pdf=new jsPDF({orientation:'portrait',unit:'mm',format:'a4',compress:true});
-    const margin=2, usableW=206, usableH=293;
+    // Read the live dropdown at export time so changing "products per row" always takes effect.
+    const liveCols=Number(document.getElementById('builder-columns')?.value || state.columns || 3);
+    const cols=Math.max(2,Math.min(4,Number.isFinite(liveCols)?liveCols:3));
+    state.columns=cols;
     const cards=[...target.querySelectorAll('.preview-product')];
-    const rawCols=Number(state.columns||3);
-    const cols=Math.max(2,Math.min(4,Number.isFinite(rawCols)?rawCols:3));
-    // Use explicit, compact page grids: six cards for 2 columns, twelve for 3/4 columns.
-    // Cards are cloned individually so the export is independent of preview overflow/layout.
-    const rowsPerPage=4;
-    const batchSize=cols*rowsPerPage;
-    const batches=[];
+    // Four rows per page, with the final page using only the rows it needs.
+    const rowsPerPage=4, batchSize=cols*rowsPerPage, batches=[];
     if(!cards.length)batches.push([]); else for(let i=0;i<cards.length;i+=batchSize)batches.push(cards.slice(i,i+batchSize));
-
+    const pageW=794, pageH=1123, padX=28, padY=24, headerH=68, footerH=32, gridGapX=18, gridGapY=12;
     for(let pageIndex=0;pageIndex<batches.length;pageIndex++){
+      const batch=batches[pageIndex], rows=Math.max(1,Math.ceil(batch.length/cols));
       const page=document.createElement('div');
       page.className='pdf-export-page';
-      Object.assign(page.style,{position:'fixed',left:'0',top:'0',zIndex:'-1',width:'794px',height:'1123px',minHeight:'1123px',margin:'0',padding:'24px 24px',background:'#fff',boxSizing:'border-box',fontFamily:'Arial,sans-serif',color:'#20201e',overflow:'hidden',contain:'none',display:'flex',flexDirection:'column'});
+      Object.assign(page.style,{position:'fixed',left:'-10000px',top:'0',zIndex:'-1',width:pageW+'px',height:pageH+'px',margin:'0',padding:`${padY}px ${padX}px`,background:'#fff',boxSizing:'border-box',fontFamily:'Arial,sans-serif',color:'#20201e',overflow:'hidden',display:'flex',flexDirection:'column'});
       const head=target.querySelector('.preview-head')?.cloneNode(true);
       if(head){
-        Object.assign(head.style,{display:'flex',justifyContent:'space-between',gap:'18px',width:'100%',paddingBottom:'6px',margin:'0 0 8px',borderBottom:'1px solid #b9b9b4',alignItems:'flex-start',boxSizing:'border-box'});
+        Object.assign(head.style,{display:'flex',flex:'0 0 '+headerH+'px',height:headerH+'px',minHeight:headerH+'px',justifyContent:'space-between',gap:'18px',width:'100%',paddingBottom:'8px',margin:'0',borderBottom:'1px solid #b9b9b4',alignItems:'flex-start',boxSizing:'border-box',overflow:'hidden'});
         head.querySelectorAll('*').forEach(el=>el.style.boxSizing='border-box');
-        const brand=head.querySelector('.preview-brand');if(brand)Object.assign(brand.style,{fontSize:'17px',lineHeight:'1.15',marginBottom:'3px'});
-        head.querySelectorAll('.preview-sub').forEach(el=>Object.assign(el.style,{fontSize:'8px',lineHeight:'1.25',marginBottom:'2px',overflowWrap:'anywhere'}));
-        const title=head.querySelector('h2');if(title)Object.assign(title.style,{fontSize:'14px',lineHeight:'1.15',margin:'3px 0'});
+        const brand=head.querySelector('.preview-brand');if(brand)Object.assign(brand.style,{fontSize:'18px',lineHeight:'1.15',marginBottom:'4px'});
+        head.querySelectorAll('.preview-sub').forEach(el=>Object.assign(el.style,{fontSize:'9px',lineHeight:'1.25',marginBottom:'2px',overflowWrap:'anywhere'}));
+        const title=head.querySelector('h2');if(title)Object.assign(title.style,{fontSize:'15px',lineHeight:'1.15',margin:'3px 0'});
         page.appendChild(head);
       }
+      const footerClone=pageIndex===batches.length-1?target.querySelector('.preview-footer')?.cloneNode(true):null;
       const grid=document.createElement('div');
-      Object.assign(grid.style,{display:'grid',gridTemplateColumns:`repeat(${cols}, minmax(0, 1fr))`,gridTemplateRows:`repeat(${rowsPerPage}, minmax(0, 1fr))`,gridAutoFlow:'row',columnGap:'14px',rowGap:'12px',alignItems:'stretch',alignContent:'stretch',width:'100%',height:'950px',flex:'0 0 950px',minHeight:'950px',margin:'0',padding:'0',boxSizing:'border-box'});
-      for(const sourceCard of batches[pageIndex]){
+      const availableGridH=pageH-(padY*2)-headerH-(footerClone?footerH:0);
+      Object.assign(grid.style,{display:'grid',gridTemplateColumns:`repeat(${cols}, minmax(0, 1fr))`,gridTemplateRows:`repeat(${rows}, minmax(0, 1fr))`,gridAutoFlow:'row',columnGap:gridGapX+'px',rowGap:gridGapY+'px',alignItems:'stretch',alignContent:'stretch',width:'100%',height:availableGridH+'px',flex:`0 0 ${availableGridH}px`,minHeight:'0',margin:'0',padding:'10px 0 0',boxSizing:'border-box'});
+      for(const sourceCard of batch){
         const card=sourceCard.cloneNode(true);
-        // Remove any inherited sizing/placement rules that could force one card per row.
         card.removeAttribute('id');
         Object.assign(card.style,{display:'flex',flexDirection:'column',position:'static',float:'none',gridColumn:'auto',gridRow:'auto',minWidth:'0',width:'100%',height:'100%',minHeight:'0',maxHeight:'none',overflow:'hidden',margin:'0',padding:'0',breakInside:'avoid',pageBreakInside:'avoid',boxSizing:'border-box',alignSelf:'stretch'});
         const imgBox=card.querySelector('.product-image');
-        if(imgBox)Object.assign(imgBox.style,{display:'flex',position:'relative',width:'100%',height:cols===2?'172px':cols===3?'158px':'148px',minHeight:cols===2?'172px':cols===3?'158px':'148px',maxHeight:cols===2?'172px':cols===3?'158px':'148px',flex:'0 0 auto',margin:'0 0 5px',padding:'3px',overflow:'hidden',background:'#fff',alignItems:'center',justifyContent:'center',boxSizing:'border-box'});
+        const cellH=(availableGridH-(rows-1)*gridGapY)/rows;
+        const titleH=cols===2?30:28, infoH=cols===2?52:48;
+        const imageH=Math.max(55,Math.min(cols===2?150:cols===3?128:112,cellH-titleH-infoH-8));
+        if(imgBox)Object.assign(imgBox.style,{display:'flex',position:'relative',width:'100%',height:imageH+'px',minHeight:imageH+'px',maxHeight:imageH+'px',flex:'0 0 '+imageH+'px',margin:'0 0 5px',padding:'3px',overflow:'hidden',background:'#fff',alignItems:'center',justifyContent:'center',boxSizing:'border-box'});
         const img=card.querySelector('.product-image img');
         if(img)Object.assign(img.style,{display:'block',position:'static',float:'none',width:'auto',height:'auto',maxWidth:'100%',maxHeight:'100%',objectFit:'contain',objectPosition:'center',flex:'0 1 auto'});
-        const h=card.querySelector('h4');if(h)Object.assign(h.style,{display:'block',fontSize:cols===2?'9px':'8px',lineHeight:'1.2',margin:'3px 0 2px',fontWeight:'700',overflowWrap:'anywhere'});
-        card.querySelectorAll('p').forEach(el=>Object.assign(el.style,{display:'block',fontSize:'7px',lineHeight:'1.2',margin:'0 0 2px',overflowWrap:'anywhere',color:'#686862'}));
-        const price=card.querySelector('.preview-price');if(price)Object.assign(price.style,{fontSize:'7.5px',lineHeight:'1.2',fontWeight:'700',marginTop:'2px'});
+        const h=card.querySelector('h4');if(h)Object.assign(h.style,{display:'block',fontSize:cols===2?'10px':cols===3?'8.5px':'7.5px',lineHeight:'1.2',margin:'3px 0 2px',fontWeight:'700',overflowWrap:'anywhere'});
+        card.querySelectorAll('p').forEach(el=>Object.assign(el.style,{display:'block',fontSize:cols===2?'8px':'7px',lineHeight:'1.2',margin:'0 0 2px',overflowWrap:'anywhere',color:'#686862'}));
+        const price=card.querySelector('.preview-price');if(price)Object.assign(price.style,{fontSize:cols===2?'8.5px':'7.5px',lineHeight:'1.2',fontWeight:'700',marginTop:'2px'});
         grid.appendChild(card);
       }
       page.appendChild(grid);
-      if(pageIndex===batches.length-1){
-        const footer=target.querySelector('.preview-footer')?.cloneNode(true);
-        if(footer){Object.assign(footer.style,{display:'flex',justifyContent:'space-between',flexWrap:'wrap',marginTop:'10px',paddingTop:'6px',fontSize:'7px',lineHeight:'1.2',gap:'8px',borderTop:'1px solid #e8e7e2',breakInside:'avoid'});page.appendChild(footer);}
-      }
+      if(footerClone){Object.assign(footerClone.style,{display:'flex',flex:'0 0 '+footerH+'px',height:footerH+'px',justifyContent:'space-between',alignItems:'flex-end',flexWrap:'wrap',margin:'0',paddingTop:'7px',fontSize:'8px',lineHeight:'1.2',gap:'8px',borderTop:'1px solid #e8e7e2',boxSizing:'border-box',overflow:'hidden'});page.appendChild(footerClone);}
       document.body.appendChild(page);temporary.push(page);
       await Promise.all([...page.querySelectorAll('img')].map(img=>img.decode?img.decode().catch(()=>{}):new Promise(resolve=>{if(img.complete)resolve();else{img.onload=resolve;img.onerror=resolve;}})));
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      // Measure the complete content, not the browser viewport. Give html2canvas explicit
-      // dimensions so it cannot silently capture only the first row or viewport-height slice.
-      const rect=page.getBoundingClientRect();
-      const captureWidth=794;
-      const captureHeight=1123;
-      const canvas=await window.html2canvas(page,{scale:2,useCORS:true,allowTaint:false,backgroundColor:'#ffffff',logging:false,width:captureWidth,height:captureHeight,windowWidth:captureWidth,windowHeight:captureHeight,scrollX:0,scrollY:0});
+      const canvas=await window.html2canvas(page,{scale:2,useCORS:true,allowTaint:false,backgroundColor:'#ffffff',logging:false,width:pageW,height:pageH,windowWidth:pageW,windowHeight:pageH,scrollX:0,scrollY:0});
       if(!canvas.width||!canvas.height)throw new Error('PDF page capture returned an empty image');
       if(pageIndex>0)pdf.addPage();
-      // Fit to the printable A4 area without stretching. Layout sizing above is tuned to
-      // use most of the page height, so the remaining whitespace is kept small.
-      const pxToMm=Math.min(usableW/canvas.width,usableH/canvas.height);
-      // The export canvas is deliberately A4-proportioned, so this fit uses nearly all
-      // available page height rather than centering a short content-only screenshot.
-      const drawW=canvas.width*pxToMm, drawH=canvas.height*pxToMm;
-      pdf.addImage(canvas.toDataURL('image/jpeg',0.94),'JPEG',margin+(usableW-drawW)/2,margin+(usableH-drawH)/2,drawW,drawH,undefined,'FAST');
+      // Fill A4 edge-to-edge with a small, consistent 2 mm printer-safe inset.
+      const inset=2, drawW=210-inset*2, drawH=297-inset*2;
+      pdf.addImage(canvas.toDataURL('image/jpeg',0.95),'JPEG',inset,inset,drawW,drawH,undefined,'FAST');
     }
     const clean=(state.catalogueTitle||'CloudKrafts-Catalogue').replace(/[^a-z0-9-_ ]/gi,'').trim().replace(/\s+/g,'-')||'CloudKrafts-Catalogue';
     pdf.save(clean+'.pdf');
