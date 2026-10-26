@@ -197,13 +197,13 @@ async function exportCataloguePDF(){
     if(btn){btn.disabled=true;btn.textContent='Generating PDF…';}
     const {jsPDF}=window.jspdf;
     const pdf=new jsPDF({orientation:'portrait',unit:'mm',format:'a4',compress:true});
-    const margin=8, usableW=194, usableH=281;
+    const margin=4, usableW=202, usableH=289;
     const cards=[...target.querySelectorAll('.preview-product')];
     const rawCols=Number(state.columns||3);
     const cols=Math.max(2,Math.min(4,Number.isFinite(rawCols)?rawCols:3));
     // Use explicit, compact page grids: six cards for 2 columns, twelve for 3/4 columns.
     // Cards are cloned individually so the export is independent of preview overflow/layout.
-    const rowsPerPage=cols===2?3:4;
+    const rowsPerPage=4;
     const batchSize=cols*rowsPerPage;
     const batches=[];
     if(!cards.length)batches.push([]); else for(let i=0;i<cards.length;i+=batchSize)batches.push(cards.slice(i,i+batchSize));
@@ -211,10 +211,10 @@ async function exportCataloguePDF(){
     for(let pageIndex=0;pageIndex<batches.length;pageIndex++){
       const page=document.createElement('div');
       page.className='pdf-export-page';
-      Object.assign(page.style,{position:'fixed',left:'0',top:'0',zIndex:'-1',width:'794px',height:'auto',minHeight:'0',margin:'0',padding:'18px 22px',background:'#fff',boxSizing:'border-box',fontFamily:'Arial,sans-serif',color:'#20201e',overflow:'visible',contain:'none'});
+      Object.assign(page.style,{position:'fixed',left:'0',top:'0',zIndex:'-1',width:'794px',height:'auto',minHeight:'0',margin:'0',padding:'12px 16px',background:'#fff',boxSizing:'border-box',fontFamily:'Arial,sans-serif',color:'#20201e',overflow:'visible',contain:'none'});
       const head=target.querySelector('.preview-head')?.cloneNode(true);
       if(head){
-        Object.assign(head.style,{display:'flex',justifyContent:'space-between',gap:'18px',width:'100%',paddingBottom:'8px',margin:'0 0 12px',borderBottom:'1px solid #b9b9b4',alignItems:'flex-start',boxSizing:'border-box'});
+        Object.assign(head.style,{display:'flex',justifyContent:'space-between',gap:'18px',width:'100%',paddingBottom:'6px',margin:'0 0 8px',borderBottom:'1px solid #b9b9b4',alignItems:'flex-start',boxSizing:'border-box'});
         head.querySelectorAll('*').forEach(el=>el.style.boxSizing='border-box');
         const brand=head.querySelector('.preview-brand');if(brand)Object.assign(brand.style,{fontSize:'17px',lineHeight:'1.15',marginBottom:'3px'});
         head.querySelectorAll('.preview-sub').forEach(el=>Object.assign(el.style,{fontSize:'8px',lineHeight:'1.25',marginBottom:'2px',overflowWrap:'anywhere'}));
@@ -222,14 +222,14 @@ async function exportCataloguePDF(){
         page.appendChild(head);
       }
       const grid=document.createElement('div');
-      Object.assign(grid.style,{display:'grid',gridTemplateColumns:`repeat(${cols}, minmax(0, 1fr))`,gridAutoRows:'max-content',gridAutoFlow:'row',columnGap:'14px',rowGap:'10px',alignItems:'start',alignContent:'start',width:'100%',margin:'0',padding:'0',boxSizing:'border-box'});
+      Object.assign(grid.style,{display:'grid',gridTemplateColumns:`repeat(${cols}, minmax(0, 1fr))`,gridAutoRows:'max-content',gridAutoFlow:'row',columnGap:'12px',rowGap:'8px',alignItems:'start',alignContent:'start',width:'100%',margin:'0',padding:'0',boxSizing:'border-box'});
       for(const sourceCard of batches[pageIndex]){
         const card=sourceCard.cloneNode(true);
         // Remove any inherited sizing/placement rules that could force one card per row.
         card.removeAttribute('id');
         Object.assign(card.style,{display:'block',position:'static',float:'none',gridColumn:'auto',gridRow:'auto',minWidth:'0',width:'100%',height:'auto',minHeight:'0',maxHeight:'none',overflow:'visible',margin:'0',padding:'0',breakInside:'avoid',pageBreakInside:'avoid',boxSizing:'border-box',alignSelf:'start'});
         const imgBox=card.querySelector('.product-image');
-        if(imgBox)Object.assign(imgBox.style,{display:'flex',position:'relative',width:'100%',height:cols===2?'105px':'92px',minHeight:cols===2?'105px':'92px',maxHeight:cols===2?'105px':'92px',margin:'0 0 5px',padding:'3px',overflow:'hidden',background:'#fff',alignItems:'center',justifyContent:'center',boxSizing:'border-box'});
+        if(imgBox)Object.assign(imgBox.style,{display:'flex',position:'relative',width:'100%',height:cols===2?'172px':cols===3?'158px':'148px',minHeight:cols===2?'172px':cols===3?'158px':'148px',maxHeight:cols===2?'172px':cols===3?'158px':'148px',margin:'0 0 5px',padding:'3px',overflow:'hidden',background:'#fff',alignItems:'center',justifyContent:'center',boxSizing:'border-box'});
         const img=card.querySelector('.product-image img');
         if(img)Object.assign(img.style,{display:'block',position:'static',float:'none',width:'auto',height:'auto',maxWidth:'100%',maxHeight:'100%',objectFit:'contain',objectPosition:'center',flex:'0 1 auto'});
         const h=card.querySelector('h4');if(h)Object.assign(h.style,{display:'block',fontSize:cols===2?'9px':'8px',lineHeight:'1.2',margin:'3px 0 2px',fontWeight:'700',overflowWrap:'anywhere'});
@@ -253,11 +253,10 @@ async function exportCataloguePDF(){
       const canvas=await window.html2canvas(page,{scale:2,useCORS:true,allowTaint:false,backgroundColor:'#ffffff',logging:false,width:captureWidth,height:captureHeight,windowWidth:captureWidth,windowHeight:captureHeight,scrollX:0,scrollY:0});
       if(!canvas.width||!canvas.height)throw new Error('PDF page capture returned an empty image');
       if(pageIndex>0)pdf.addPage();
-      const ratio=Math.min(usableW/(canvas.width/(canvas.height>0?1:1)),usableH/(canvas.height));
-      // Convert canvas pixels to a proportional A4 image. Center horizontally and vertically.
-      const pxToMm=usableW/canvas.width;
-      let drawW=usableW,drawH=canvas.height*pxToMm;
-      if(drawH>usableH){drawH=usableH;drawW=canvas.width*(usableH/canvas.height);}
+      // Fit to the printable A4 area without stretching. Layout sizing above is tuned to
+      // use most of the page height, so the remaining whitespace is kept small.
+      const pxToMm=Math.min(usableW/canvas.width,usableH/canvas.height);
+      const drawW=canvas.width*pxToMm, drawH=canvas.height*pxToMm;
       pdf.addImage(canvas.toDataURL('image/jpeg',0.94),'JPEG',margin+(usableW-drawW)/2,margin+(usableH-drawH)/2,drawW,drawH,undefined,'FAST');
     }
     const clean=(state.catalogueTitle||'CloudKrafts-Catalogue').replace(/[^a-z0-9-_ ]/gi,'').trim().replace(/\s+/g,'-')||'CloudKrafts-Catalogue';
