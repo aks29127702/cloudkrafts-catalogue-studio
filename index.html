@@ -205,14 +205,14 @@ async function exportCataloguePDF(){
     const cols=Math.max(1,Math.min(4,Number.isFinite(configuredCols)?configuredCols:2));
     // Use a compact, multi-row A4 layout. Three rows per page is the default target;
     // the finished page is then uniformly scaled to fit the printable area.
-    const rowsPerPage=3;
+    const rowsPerPage=cols>=3?4:3;
     const batchSize=cols*rowsPerPage;
     const batches=[];
     if(!cards.length)batches.push([]);
     else for(let i=0;i<cards.length;i+=batchSize)batches.push(cards.slice(i,i+batchSize));
     for(let pageIndex=0;pageIndex<batches.length;pageIndex++){
       const page=document.createElement('div');
-      Object.assign(page.style,{position:'fixed',left:'-20000px',top:'0',width:'794px',margin:'0',padding:'20px 24px',background:'#fff',boxSizing:'border-box',fontFamily:'Arial,sans-serif',color:'#20201e',overflow:'visible'});
+      Object.assign(page.style,{position:'absolute',left:'-20000px',top:'0',width:'794px',height:'auto',minHeight:'0',margin:'0',padding:'20px 24px',background:'#fff',boxSizing:'border-box',fontFamily:'Arial,sans-serif',color:'#20201e',overflow:'visible'});
       const head=target.querySelector('.preview-head')?.cloneNode(true);
       if(head){Object.assign(head.style,{display:'flex',gap:'18px',paddingBottom:'10px',marginBottom:'14px',borderBottom:'1px solid #20201e',alignItems:'flex-start'});head.querySelectorAll('*').forEach(el=>el.style.boxSizing='border-box');const brand=head.querySelector('.preview-brand');if(brand)Object.assign(brand.style,{fontSize:'20px',lineHeight:'1.2',marginBottom:'4px'});head.querySelectorAll('.preview-sub').forEach(el=>Object.assign(el.style,{fontSize:'10px',lineHeight:'1.35',marginBottom:'2px',overflowWrap:'anywhere'}));const title=head.querySelector('h2');if(title)Object.assign(title.style,{fontSize:'17px',lineHeight:'1.2',margin:'4px 0'});page.appendChild(head);}
       const grid=document.createElement('div');
@@ -234,7 +234,8 @@ async function exportCataloguePDF(){
       document.body.appendChild(page);temporary.push(page);
       await Promise.all([...page.querySelectorAll('img')].map(img=>img.decode?img.decode().catch(()=>{}):new Promise(resolve=>{if(img.complete)resolve();else{img.onload=resolve;img.onerror=resolve;}})));
       await new Promise(resolve=>setTimeout(resolve,100));
-      const canvas=await window.html2canvas(page,{scale:2,useCORS:true,backgroundColor:'#ffffff',logging:false,width:794,windowWidth:794,scrollX:0,scrollY:0});
+      const captureHeight=Math.max(page.scrollHeight,page.offsetHeight,1);
+      const canvas=await window.html2canvas(page,{scale:2,useCORS:true,backgroundColor:'#ffffff',logging:false,width:794,height:captureHeight,windowWidth:794,windowHeight:captureHeight,scrollX:0,scrollY:0});
       if(pageIndex>0)pdf.addPage();
       const ratio=Math.min(usableW/canvas.width,usableH/canvas.height);
       const drawW=canvas.width*ratio,drawH=canvas.height*ratio;
